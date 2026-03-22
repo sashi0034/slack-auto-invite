@@ -169,6 +169,18 @@ async function inviteUserToTargetChannels(userId: string, channelIdForNotificati
         text: message,
       });
     }
+    const config = await loadConfig();
+    if (config.triggerChannelId) {
+      let logMessage = `<@${userId}> さんの招待処理が完了しました。\n成功: ${successCount} チャンネル / 失敗: ${failCount} チャンネル`;
+      if (failCount > 0) {
+        logMessage += `\n失敗したチャンネル: ${errors.join(", ")}`;
+      }
+      await getApp().client.chat.postMessage({
+        channel: config.triggerChannelId,
+        text: logMessage,
+      });
+    }
+
     console.log(`Invited user ${userId} to ${successCount} channels (failed: ${failCount}).`);
 
   } catch (error) {
