@@ -189,6 +189,87 @@ async function inviteUserToTargetChannels(userId: string, channelIdForNotificati
 }
 
 /**
+ * チャンネルのメンバー一覧を取得する
+ */
+async function getChannelMembers(channelId: string): Promise<string[]> {
+  const members: string[] = [];
+  try {
+    let cursor: string | undefined;
+    do {
+      const result = await getApp().client.conversations.members({
+        channel: channelId,
+        cursor: cursor,
+        limit: 1000,
+      });
+      if (result.members) {
+        members.push(...result.members);
+      }
+      cursor = result.response_metadata?.next_cursor;
+    } while (cursor);
+  } catch (error) {
+    console.error(`Error fetching members for channel ${channelId}:`, error);
+  }
+  return members;
+}
+
+/**
+ * 複数のユーザーを一つのチャンネルに招待する
+ */
+async function inviteUsersToChannel(channelId: string, userIds: string[]) {
+  if (userIds.length === 0) return;
+
+  // ボットがチャンネルに参加
+  try {
+    await getApp().client.conversations.join({ channel: channelId });
+  } catch (error: any) {
+    console.error(`Failed to join channel ${channelId}:`, error.data?.error || error.message);
+  }
+
+  // 招待処理
+  // 一度に招待できる上限は 1000 人だが、念のため分割して処理
+  const chunkSize = 500;
+  for (let i = 0; i < userIds.length; i += chunkSize) {
+    const chunk = userIds.slice(i, i + chunkSize);
+    try {
+      await getApp().client.conversations.invite({
+        channel: channelId,
+        users: chunk.join(","),
+      });
+      console.log(`Successfully invited ${chunk.length} users to channel ${channelId}`);
+    } catch (error: any) {
+      const errorMsg = error.data?.error || error.message;
+      // 誰か一人が既に入っていると already_in_channel になることがあるため、その場合は個別招待にフォールバック
+      if (errorMsg === "already_in_channel") {
+        for (const userId of chunk) {
+          try {
+            await getApp().client.conversations.invite({
+              channel: channelId,
+              users: userId,
+            });
+          } catch (individualError: any) {
+            const indErrorMsg = individualError.data?.error || individualError.message;
+            if (indErrorMsg !== "already_in_channel") {
+              console.error(`Failed to invite user ${userId} to ${channelId}:`, indErrorMsg);
+            }
+          }
+        }
+      } else {
+        console.error(`Failed to invite chunk to ${channelId}:`, errorMsg);
+      }
+    }
+  }
+
+  // ログ送信
+  const config = await loadConfig();
+  if (config.triggerChannelId) {
+    await getApp().client.chat.postMessage({
+      channel: config.triggerChannelId,
+      text: `新しく作成されたチャンネル <#${channelId}> に、指定チャンネルのメンバー（${userIds.length}名）を招待しました。`,
+    });
+  }
+}
+
+/**
  * ボタン押しアクションのリスナー
  */
 
@@ -267,6 +348,25 @@ async function sendStartupMessage() {
       if (event.channel === config.triggerChannelId) {
         console.log(`User ${event.user} joined trigger channel ${event.channel}. Starting auto-invite...`);
         await inviteUserToTargetChannels(event.user);
+      }
+    });
+
+    // 新しいチャンネル作成イベントの登録
+    app.event("channel_created", async ({ event }) => {
+      const channelNameWithHash = `#${event.channel.name}`;
+      if (channelNameWithHash.startsWith(TARGET_CHANNEL_PREFIX)) {
+        console.log(`New target channel created: ${event.channel.name} (${event.channel.id})`);
+        const config = await loadConfig();
+        if (config.triggerChannelId) {
+          // 少し待ってから実行（チャンネル作成直後だと API が不安定な場合があるため）
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          
+          const members = await getChannelMembers(config.triggerChannelId);
+          // 作成者を除外（既にチャンネルにいるため。除外しないと invite がエラーになる場合がある）
+          const membersToInvite = members.filter(m => m !== event.channel.creator);
+          
+          await inviteUsersToChannel(event.channel.id, membersToInvite);
+        }
       }
     });
 
