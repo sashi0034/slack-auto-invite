@@ -171,7 +171,7 @@ async function inviteUserToTargetChannels(userId: string, channelIdForNotificati
     }
     const config = await loadConfig();
     if (config.triggerChannelId) {
-      let logMessage = `<@${userId}> さんの招待処理が完了しました。\n成功: ${successCount} チャンネル / 失敗: ${failCount} チャンネル`;
+      let logMessage = `${userId} の招待処理が完了しました。\n成功: ${successCount} チャンネル / 失敗: ${failCount} チャンネル`;
       if (failCount > 0) {
         logMessage += `\n失敗したチャンネル: ${errors.join(", ")}`;
       }
