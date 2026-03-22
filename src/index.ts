@@ -203,7 +203,7 @@ async function sendStartupMessage() {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `*ボットが起動しました。*\n下のボタンを押して、対象のチャンネルに一括参加しましょう！`,
+            text: `*下のボタンを押して、新しいチャンネルに参加しましょう！*`,
           },
         },
         {
@@ -213,7 +213,7 @@ async function sendStartupMessage() {
               type: "button",
               text: {
                 type: "plain_text",
-                text: "一括招待をリクエスト",
+                text: TARGET_CHANNEL_PREFIX + " に参加する",
               },
               action_id: "invite_me_button",
               style: "primary",
