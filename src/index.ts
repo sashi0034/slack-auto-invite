@@ -215,7 +215,7 @@ async function getChannelMembers(channelId: string): Promise<string[]> {
 /**
  * 複数のユーザーを一つのチャンネルに招待する
  */
-async function inviteUsersToChannel(channelId: string, userIds: string[]) {
+async function inviteUsersToChannel(channelId: string, userIds: string[], customMessage?: string) {
   if (userIds.length === 0) return;
 
   // ボットがチャンネルに参加
@@ -264,8 +264,41 @@ async function inviteUsersToChannel(channelId: string, userIds: string[]) {
   if (config.triggerChannelId) {
     await getApp().client.chat.postMessage({
       channel: config.triggerChannelId,
-      text: `新しく作成されたチャンネル <#${channelId}> に、指定チャンネルのメンバー（${userIds.length}名）を招待しました。`,
+      text: customMessage || `新しく作成されたチャンネル <#${channelId}> に、指定チャンネルのメンバー（${userIds.length}名）を招待しました。`,
     });
+  }
+}
+
+/**
+ * 起動時に triggerChannelId の全ユーザーを対象チャンネルに招待する
+ */
+async function inviteStartupUsersToTargetChannels() {
+  try {
+    const config = await loadConfig();
+    const triggerChannelId = config.triggerChannelId;
+    if (!triggerChannelId) return;
+
+    console.log(`Checking members of trigger channel: ${triggerChannelId}`);
+    const triggerMembers = await getChannelMembers(triggerChannelId);
+    if (triggerMembers.length === 0) {
+      console.log("No members found in trigger channel.");
+      return;
+    }
+
+    const targetChannels = await getTargetChannels();
+    if (targetChannels.length === 0) {
+      console.log("No target channels found matching prefix.");
+      return;
+    }
+
+    console.log(`Starting bulk invite: ${triggerMembers.length} users to ${targetChannels.length} channels.`);
+    for (const target of targetChannels) {
+      const msg = `起動時処理: チャンネル <#${target.id}> に、指定チャンネル（<#${triggerChannelId}>）のメンバー ${triggerMembers.length} 名の招待を実行しました。`;
+      await inviteUsersToChannel(target.id, triggerMembers, msg);
+    }
+    console.log("Startup bulk invite process completed.");
+  } catch (error) {
+    console.error("Error in inviteStartupUsersToTargetChannels:", error);
   }
 }
 
@@ -376,6 +409,9 @@ async function sendStartupMessage() {
 
     // 起動メッセージ送信
     await sendStartupMessage();
+
+    // 起動時に既存ユーザーを一括招待
+    await inviteStartupUsersToTargetChannels();
   } catch (error) {
     console.error("Error starting app:", error);
     process.exit(1);
