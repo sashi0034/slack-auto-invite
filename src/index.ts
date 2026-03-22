@@ -31,6 +31,7 @@ async function loadConfig() {
 
   return {
     botToken: jsonConfig.botToken || process.env.SLACK_BOT_TOKEN,
+    userToken: jsonConfig.userToken || process.env.SLACK_USER_TOKEN,
     appToken: jsonConfig.appToken || process.env.SLACK_APP_TOKEN,
     appId: jsonConfig.appId || process.env.SLACK_APP_ID,
     startupChannelId: jsonConfig.startupChannelId || process.env.SLACK_STARTUP_CHANNEL_ID,
@@ -112,6 +113,7 @@ async function inviteUserToTargetChannels(userId: string, channelIdForNotificati
       return;
     }
 
+    const config = await loadConfig();
     const results = await Promise.allSettled(
       targetChannels.map(async (target) => {
         // ボット自身がチャンネルに入っていない場合は、まず参加する
@@ -122,15 +124,25 @@ async function inviteUserToTargetChannels(userId: string, channelIdForNotificati
             });
           } catch (joinError: any) {
             console.error(`Failed to join channel ${target.name} (${target.id}):`, joinError.data?.error || joinError.message);
-            // 参加に失敗しても、招待を試みる（権限によっては招待できる可能性もゼロではないため、または別のエラーかもしれないため）
           }
         }
 
         // ユーザーを招待する
-        return getApp().client.conversations.invite({
-          channel: target.id,
-          users: userId,
-        });
+        try {
+          // 自分自身を招待しようとするとエラーになるため、可能であれば ID を確認する
+          // (ここでは userId が自分かどうかを直接判定できないため、try-catch で対応)
+          return await getApp().client.conversations.invite({
+            token: config.userToken || config.botToken,
+            channel: target.id,
+            users: userId,
+          });
+        } catch (inviteError: any) {
+          const errorMsg = inviteError.data?.error || inviteError.message;
+          if (errorMsg === "already_in_channel" || errorMsg === "cant_invite_self") {
+            return { ok: true };
+          }
+          throw inviteError;
+        }
       })
     );
 
@@ -169,7 +181,7 @@ async function inviteUserToTargetChannels(userId: string, channelIdForNotificati
         text: message,
       });
     }
-    const config = await loadConfig();
+    // const config = await loadConfig(); // この行を削除（関数の最初で取得済み）
     if (config.triggerChannelId) {
       let logMessage = `${userId} の招待処理が完了しました。\n成功: ${successCount} チャンネル / 失敗: ${failCount} チャンネル`;
       if (failCount > 0) {
@@ -226,29 +238,31 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
   }
 
   // 招待処理
-  // 一度に招待できる上限は 1000 人だが、念のため分割して処理
+  const config = await loadConfig();
   const chunkSize = 500;
   for (let i = 0; i < userIds.length; i += chunkSize) {
     const chunk = userIds.slice(i, i + chunkSize);
     try {
       await getApp().client.conversations.invite({
+        token: config.userToken || config.botToken,
         channel: channelId,
         users: chunk.join(","),
       });
       console.log(`Successfully invited ${chunk.length} users to channel ${channelId}`);
     } catch (error: any) {
       const errorMsg = error.data?.error || error.message;
-      // 誰か一人が既に入っていると already_in_channel になることがあるため、その場合は個別招待にフォールバック
-      if (errorMsg === "already_in_channel") {
+      // cant_invite_self や already_in_channel の場合は個別に処理
+      if (errorMsg === "already_in_channel" || errorMsg === "cant_invite_self" || errorMsg === "invalid_arguments") {
         for (const userId of chunk) {
           try {
             await getApp().client.conversations.invite({
+              token: config.userToken || config.botToken,
               channel: channelId,
               users: userId,
             });
           } catch (individualError: any) {
             const indErrorMsg = individualError.data?.error || individualError.message;
-            if (indErrorMsg !== "already_in_channel") {
+            if (indErrorMsg !== "already_in_channel" && indErrorMsg !== "cant_invite_self") {
               console.error(`Failed to invite user ${userId} to ${channelId}:`, indErrorMsg);
             }
           }
@@ -260,7 +274,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
   }
 
   // ログ送信
-  const config = await loadConfig();
+  // const config = await loadConfig(); // この行を削除（関数の最初で取得済み）
   if (config.triggerChannelId) {
     await getApp().client.chat.postMessage({
       channel: config.triggerChannelId,
@@ -285,16 +299,29 @@ async function inviteStartupUsersToTargetChannels() {
       return;
     }
 
+    // 招待主（userToken の持ち主）の ID を取得して除外する
+    let inviterId: string | undefined;
+    if (config.userToken) {
+      try {
+        const authTest = await getApp().client.auth.test({ token: config.userToken });
+        inviterId = authTest.user_id;
+      } catch (e) {
+        console.warn("Failed to fetch userToken owner info.");
+      }
+    }
+
+    const filteredMembers = inviterId ? triggerMembers.filter(id => id !== inviterId) : triggerMembers;
+
     const targetChannels = await getTargetChannels();
     if (targetChannels.length === 0) {
       console.log("No target channels found matching prefix.");
       return;
     }
 
-    console.log(`Starting bulk invite: ${triggerMembers.length} users to ${targetChannels.length} channels.`);
+    console.log(`Starting bulk invite: ${filteredMembers.length} users (filtered from ${triggerMembers.length}) to ${targetChannels.length} channels.`);
     for (const target of targetChannels) {
-      const msg = `起動時処理: チャンネル <#${target.id}> に、指定チャンネル（<#${triggerChannelId}>）のメンバー ${triggerMembers.length} 名の招待を実行しました。`;
-      await inviteUsersToChannel(target.id, triggerMembers, msg);
+      const msg = `起動時処理: チャンネル <#${target.id}> に、指定チャンネル（<#${triggerChannelId}>）のメンバー ${filteredMembers.length} 名の招待を実行しました。`;
+      await inviteUsersToChannel(target.id, filteredMembers, msg);
     }
     console.log("Startup bulk invite process completed.");
   } catch (error) {
