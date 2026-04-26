@@ -44,6 +44,9 @@ async function loadConfig() {
 // ここでは、app インスタンス作成のために、環境変数 または 固定のプレフィックスなどを定義
 const TARGET_CHANNEL_PREFIX = "#2026-";
 
+/** ミリ秒待機するユーティリティ */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 // アプリのインスタンス
 let app: App;
 
@@ -255,7 +258,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
     } catch (error: any) {
       const errorMsg = error.data?.error || error.message;
       // cant_invite_self や already_in_channel の場合は個別に処理
-      if (errorMsg === "already_in_channel" || errorMsg === "cant_invite_self" || errorMsg === "invalid_arguments") {
+      if (errorMsg === "already_in_channel" || errorMsg === "cant_invite_self" || errorMsg === "invalid_arguments" || errorMsg === "no_permission") {
         for (const userId of chunk) {
           try {
             await getApp().client.conversations.invite({
@@ -270,6 +273,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
               console.error(`Failed to invite user ${userId} to ${channelId}:`, indErrorMsg);
             }
           }
+          await sleep(300); // rate limit 対策: 個別招待間に 300ms 待機
         }
       } else {
         console.error(`Failed to invite chunk to ${channelId}:`, errorMsg);
@@ -332,6 +336,7 @@ async function inviteStartupUsersToTargetChannels(isCron = false) {
       if (invitedCount > 0) {
         actuallyInvitedChannelsCount++;
       }
+      await sleep(1000); // rate limit 対策: チャンネル間に 1 秒待機
     }
 
     if (actuallyInvitedChannelsCount > 0) {
