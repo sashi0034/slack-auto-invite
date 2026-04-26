@@ -2,6 +2,7 @@ import { App, LogLevel } from "@slack/bolt";
 import * as dotenv from "dotenv";
 import * as fs from "fs/promises";
 import * as path from "path";
+import cron from "node-cron";
 
 dotenv.config();
 
@@ -240,6 +241,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
   // 招待処理
   const config = await loadConfig();
   const chunkSize = 500;
+  let actuallyInvitedCount = 0;
   for (let i = 0; i < userIds.length; i += chunkSize) {
     const chunk = userIds.slice(i, i + chunkSize);
     try {
@@ -249,6 +251,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
         users: chunk.join(","),
       });
       console.log(`Successfully invited ${chunk.length} users to channel ${channelId}`);
+      actuallyInvitedCount += chunk.length;
     } catch (error: any) {
       const errorMsg = error.data?.error || error.message;
       // cant_invite_self や already_in_channel の場合は個別に処理
@@ -260,6 +263,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
               channel: channelId,
               users: userId,
             });
+            actuallyInvitedCount++;
           } catch (individualError: any) {
             const indErrorMsg = individualError.data?.error || individualError.message;
             if (indErrorMsg !== "already_in_channel" && indErrorMsg !== "cant_invite_self") {
@@ -274,19 +278,18 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
   }
 
   // ログ送信
-  // const config = await loadConfig(); // この行を削除（関数の最初で取得済み）
-  if (config.triggerChannelId) {
+  if (config.triggerChannelId && actuallyInvitedCount > 0) {
     await getApp().client.chat.postMessage({
       channel: config.triggerChannelId,
-      text: customMessage || `新しく作成されたチャンネル <#${channelId}> に、指定チャンネルのメンバー（${userIds.length}名）を招待しました。`,
+      text: customMessage ? customMessage.replace("{count}", actuallyInvitedCount.toString()) : `新しく作成されたチャンネル <#${channelId}> に、指定チャンネルのメンバー（${actuallyInvitedCount}名）を新たに招待しました。`,
     });
   }
 }
 
 /**
- * 起動時に triggerChannelId の全ユーザーを対象チャンネルに招待する
+ * 起動時や定期チェック時に triggerChannelId の全ユーザーを対象チャンネルに招待する
  */
-async function inviteStartupUsersToTargetChannels() {
+async function inviteStartupUsersToTargetChannels(isCron = false) {
   try {
     const config = await loadConfig();
     const triggerChannelId = config.triggerChannelId;
@@ -319,11 +322,12 @@ async function inviteStartupUsersToTargetChannels() {
     }
 
     console.log(`Starting bulk invite: ${filteredMembers.length} users (filtered from ${triggerMembers.length}) to ${targetChannels.length} channels.`);
+    const prefix = isCron ? "定期チェック" : "起動時処理";
     for (const target of targetChannels) {
-      const msg = `起動時処理: チャンネル <#${target.id}> に、指定チャンネル（<#${triggerChannelId}>）のメンバー ${filteredMembers.length} 名の招待を実行しました。`;
+      const msg = `${prefix}: チャンネル <#${target.id}> に、指定チャンネル（<#${triggerChannelId}>）のメンバー {count} 名を新たに招待しました。`;
       await inviteUsersToChannel(target.id, filteredMembers, msg);
     }
-    console.log("Startup bulk invite process completed.");
+    console.log("Startup/Cron bulk invite process completed.");
   } catch (error) {
     console.error("Error in inviteStartupUsersToTargetChannels:", error);
   }
@@ -439,6 +443,15 @@ async function sendStartupMessage() {
 
     // 起動時に既存ユーザーを一括招待
     await inviteStartupUsersToTargetChannels();
+
+    // 毎日20:00に定期チェック
+    cron.schedule("0 20 * * *", () => {
+      console.log("Running daily check at 20:00...");
+      inviteStartupUsersToTargetChannels(true);
+    }, {
+      timezone: "Asia/Tokyo"
+    });
+
   } catch (error) {
     console.error("Error starting app:", error);
     process.exit(1);
