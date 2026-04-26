@@ -228,8 +228,8 @@ async function getChannelMembers(channelId: string): Promise<string[]> {
 /**
  * 複数のユーザーを一つのチャンネルに招待する
  */
-async function inviteUsersToChannel(channelId: string, userIds: string[], customMessage?: string) {
-  if (userIds.length === 0) return;
+async function inviteUsersToChannel(channelId: string, userIds: string[], customMessage?: string, disableLog = false): Promise<number> {
+  if (userIds.length === 0) return 0;
 
   // ボットがチャンネルに参加
   try {
@@ -278,12 +278,14 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
   }
 
   // ログ送信
-  if (config.triggerChannelId && actuallyInvitedCount > 0) {
+  if (!disableLog && config.triggerChannelId && actuallyInvitedCount > 0) {
     await getApp().client.chat.postMessage({
       channel: config.triggerChannelId,
       text: customMessage ? customMessage.replace("{count}", actuallyInvitedCount.toString()) : `新しく作成されたチャンネル <#${channelId}> に、指定チャンネルのメンバー（${actuallyInvitedCount}名）を新たに招待しました。`,
     });
   }
+
+  return actuallyInvitedCount;
 }
 
 /**
@@ -323,10 +325,22 @@ async function inviteStartupUsersToTargetChannels(isCron = false) {
 
     console.log(`Starting bulk invite: ${filteredMembers.length} users (filtered from ${triggerMembers.length}) to ${targetChannels.length} channels.`);
     const prefix = isCron ? "定期チェック" : "起動時処理";
+    
+    let actuallyInvitedChannelsCount = 0;
     for (const target of targetChannels) {
-      const msg = `${prefix}: チャンネル <#${target.id}> に、指定チャンネル（<#${triggerChannelId}>）のメンバー {count} 名を新たに招待しました。`;
-      await inviteUsersToChannel(target.id, filteredMembers, msg);
+      const invitedCount = await inviteUsersToChannel(target.id, filteredMembers, undefined, true);
+      if (invitedCount > 0) {
+        actuallyInvitedChannelsCount++;
+      }
     }
+
+    if (actuallyInvitedChannelsCount > 0) {
+      await getApp().client.chat.postMessage({
+        channel: triggerChannelId,
+        text: `${prefix}: ${actuallyInvitedChannelsCount}個のチャンネル に、指定チャンネルのメンバー ${filteredMembers.length} 名の招待を実行しました。`,
+      });
+    }
+
     console.log("Startup/Cron bulk invite process completed.");
   } catch (error) {
     console.error("Error in inviteStartupUsersToTargetChannels:", error);
