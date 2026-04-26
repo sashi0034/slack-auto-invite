@@ -2,7 +2,6 @@ import { App, LogLevel } from "@slack/bolt";
 import * as dotenv from "dotenv";
 import * as fs from "fs/promises";
 import * as path from "path";
-import cron from "node-cron";
 
 dotenv.config();
 
@@ -46,6 +45,9 @@ const TARGET_CHANNEL_PREFIX = "#2026-";
 
 /** ミリ秒待機するユーティリティ */
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** ラウンドロビン用: 次に処理するチャンネルのインデックス */
+let s_roundRobinChannelIndex = 0;
 
 // アプリのインスタンス
 let app: App;
@@ -293,18 +295,31 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
 }
 
 /**
- * 起動時や定期チェック時に triggerChannelId の全ユーザーを対象チャンネルに招待する
+ * ラウンドロビンで1チャンネルずつ招待する（5分ごとの定期実行用）
+ * Slackへの通知は行わない
  */
-async function inviteStartupUsersToTargetChannels(isCron = false) {
+async function inviteOneChannelRoundRobin() {
   try {
     const config = await loadConfig();
     const triggerChannelId = config.triggerChannelId;
     if (!triggerChannelId) return;
 
-    console.log(`Checking members of trigger channel: ${triggerChannelId}`);
+    const targetChannels = await getTargetChannels();
+    if (targetChannels.length === 0) {
+      console.log("[RoundRobin] No target channels found.");
+      return;
+    }
+
+    const channelIndex = s_roundRobinChannelIndex % targetChannels.length;
+    s_roundRobinChannelIndex++;
+    const target = targetChannels[channelIndex];
+    if (!target) return; // 型安全: 実際には length > 0 かつ % で範囲内なので undefined にならない
+
+    console.log(`[RoundRobin] Processing channel ${channelIndex + 1}/${targetChannels.length}: #${target.name}`);
+
     const triggerMembers = await getChannelMembers(triggerChannelId);
     if (triggerMembers.length === 0) {
-      console.log("No members found in trigger channel.");
+      console.log("[RoundRobin] No members in trigger channel.");
       return;
     }
 
@@ -315,40 +330,20 @@ async function inviteStartupUsersToTargetChannels(isCron = false) {
         const authTest = await getApp().client.auth.test({ token: config.userToken });
         inviterId = authTest.user_id;
       } catch (e) {
-        console.warn("Failed to fetch userToken owner info.");
+        console.warn("[RoundRobin] Failed to fetch userToken owner info.");
       }
     }
 
-    const filteredMembers = inviterId ? triggerMembers.filter(id => id !== inviterId) : triggerMembers;
+    const filteredMembers = inviterId
+      ? triggerMembers.filter(id => id !== inviterId)
+      : triggerMembers;
 
-    const targetChannels = await getTargetChannels();
-    if (targetChannels.length === 0) {
-      console.log("No target channels found matching prefix.");
-      return;
-    }
+    // disableLog = true でSlack通知なし
+    await inviteUsersToChannel(target.id, filteredMembers, undefined, true);
 
-    console.log(`Starting bulk invite: ${filteredMembers.length} users (filtered from ${triggerMembers.length}) to ${targetChannels.length} channels.`);
-    const prefix = isCron ? "定期チェック" : "起動時処理";
-    
-    let actuallyInvitedChannelsCount = 0;
-    for (const target of targetChannels) {
-      const invitedCount = await inviteUsersToChannel(target.id, filteredMembers, undefined, true);
-      if (invitedCount > 0) {
-        actuallyInvitedChannelsCount++;
-      }
-      await sleep(1000); // rate limit 対策: チャンネル間に 1 秒待機
-    }
-
-    if (actuallyInvitedChannelsCount > 0) {
-      await getApp().client.chat.postMessage({
-        channel: triggerChannelId,
-        text: `${prefix}: ${actuallyInvitedChannelsCount}個のチャンネル に、指定チャンネルのメンバー ${filteredMembers.length} 名の招待を実行しました。`,
-      });
-    }
-
-    console.log("Startup/Cron bulk invite process completed.");
+    console.log(`[RoundRobin] Done: #${target.name}`);
   } catch (error) {
-    console.error("Error in inviteStartupUsersToTargetChannels:", error);
+    console.error("[RoundRobin] Error:", error);
   }
 }
 
@@ -460,16 +455,14 @@ async function sendStartupMessage() {
     // 起動メッセージ送信
     await sendStartupMessage();
 
-    // 起動時に既存ユーザーを一括招待
-    await inviteStartupUsersToTargetChannels();
+    // 5分ごとにラウンドロビンで1チャンネルずつ招待
+    const ROUND_ROBIN_INTERVAL_MS = 5 * 60 * 1000; // 5分
+    setInterval(() => {
+      inviteOneChannelRoundRobin();
+    }, ROUND_ROBIN_INTERVAL_MS);
 
-    // 毎日20:00に定期チェック
-    cron.schedule("0 20 * * *", () => {
-      console.log("Running daily check at 20:00...");
-      inviteStartupUsersToTargetChannels(true);
-    }, {
-      timezone: "Asia/Tokyo"
-    });
+    // 起動直後も最初のチャンネルを処理
+    inviteOneChannelRoundRobin();
 
   } catch (error) {
     console.error("Error starting app:", error);

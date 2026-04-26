@@ -1,65 +1,80 @@
-# Slack Auto Invite Bot
+# 🚀 Slack Auto Invite Bot
 
-指定されたプレフィックス（例: `#2026-`）で始まる全チャンネルへ、ユーザーを自動で一括招待する Slack Bot です。
+指定されたプレフィックス（デフォルト: `#2026-`）で始まる全チャンネルへ、ユーザーを自動で一括招待するパワフルな Slack Bot です。
 
-## 機能
+## ✨ 主な機能
 
-1.  **手動招待**: 起動時に送信されるボタンを押したユーザーを一括招待します。
-2.  **自動招待**: 特定の指定チャンネル（`triggerChannelId`）に参加したユーザーを、既存の対象チャンネルに自動で招待します。
-3.  **新規チャンネル招待**: `#2026-` で始まる新しいチャンネルが作成された際、`triggerChannelId` のメンバー全員をそのチャンネルに自動で招待します。
+この Bot は以下の 4 つの強力な自動化機能を提供します。
 
-## セットアップ
+1. **🔘 手動一括招待 (ボタン)**
+   ボット起動時に送信されるメッセージのボタンを押すだけで、対象の全チャンネルへ自分自身を招待できます。
 
-### 1. Slack App の設定 (Slack API)
+2. **⚡ 自動招待 (チャンネル参加時)**
+   指定された「トリガーチャンネル」に参加したユーザーを、既存のすべての対象チャンネルへ自動的に招待します。
 
-Slack App の管理画面 ([api.slack.com/apps](https://api.slack.com/apps)) にて、以下の設定を行ってください。
+3. **🆕 新規チャンネルへの自動招待**
+   対象プレフィックスで始まる新しいチャンネルが作成された際、トリガーチャンネルのメンバー全員をそのチャンネルへ即座に招待します。
 
-#### **OAuth & Permissions (Scopes)**
-**Bot Token Scopes** に以下の権限を追加してください：
-*   `channels:read`: チャンネル一覧の取得に使用。
-*   `channels:join`: 新しいチャンネルが作成された際に自動で参加するために必要。
-*   `channels:manage`: ユーザーを公開チャンネルに招待するために必要。
-*   `chat:write`: メッセージや実行結果の送信、およびログ出力に使用。
-
-#### **Event Subscriptions**
-1.  **Enable Events** を `On` にします。
-2.  **Subscribe to bot events** に以下を追加します：
-    *   `member_joined_channel`: 指定チャンネルへの参加を検知するために必要。
-    *   `channel_created`: 新しいチャンネルの作成を検知するために必要。
-
-#### **Socket Mode**
-1.  **Enable Socket Mode** を `On` に設定し、`App Level Token` を生成してください（`connections:write` 権限が含まれます）。
+4. **🔄 定期ラウンドロビン招待**
+   5分ごとに1つの対象チャンネルをピックアップし、トリガーチャンネルのメンバー全員を招待します。これにより、API の負荷を抑えつつ、着実に全メンバーを全チャンネルへ網羅します。
 
 ---
 
-### 2. ローカル環境の設定
+## 🛠️ セットアップ
 
-1.  リポジトリのルートに `secret-config.json` を作成（`.gitignore` 済み）し、以下の内容を記入します：
-    ```json
-    {
-      "botToken": "xoxb-...",        // Bot User OAuth Token
-      "appToken": "xapp-...",        // App Level Token (Socket Mode)
-      "appId": "...",                // Slack App の App ID
-      "startupChannelId": "...",     // 起動メッセージを送信するチャンネルID
-      "triggerChannelId": "..."      // 自動招待のトリガーとなるチャンネルID
-    }
-    ```
+### 1. Slack App の構成
 
-2.  依存関係のインストール：
-    ```bash
-    npm install
-    ```
+[Slack API 管理画面](https://api.slack.com/apps)でアプリを作成し、以下の設定を行ってください。
 
-### 3. 実行
+#### **Scopes (Bot Token Scopes)**
+*   `channels:read` - チャンネル一覧の取得
+*   `channels:join` - 新規チャンネルへの自動参加
+*   `channels:manage` - ユーザーの招待
+*   `chat:write` - 起動メッセージの送信
 
-開発モード（ts-node）で起動する：
+#### **Events (Bot Events)**
+*   `member_joined_channel` - 指定チャンネルへの参加検知
+*   `channel_created` - 新規チャンネル作成の検知
+
+#### **Socket Mode**
+*   `Enable Socket Mode` を **On** に設定。
+*   App Level Token (`connections:write` 権限) を生成。
+
+---
+
+## ⚙️ 環境設定
+
+リポジトリのルートに `secret-config.json` を作成し、以下の形式で設定を記述します。
+
+```json
+{
+  "botToken": "xoxb-...",        // Bot User OAuth Token
+  "userToken": "xoxp-...",        // User OAuth Token (招待権限を持つユーザーのもの)
+  "appToken": "xapp-...",        // App Level Token
+  "appId": "...",                // App ID
+  "startupChannelId": "...",     // 起動メッセージ送信先 ID
+  "triggerChannelId": "..."      // 自動招待の基準となるチャンネルID
+}
+```
+
+---
+
+## 🚀 実行方法
+
+依存関係をインストールして起動します。
+
 ```bash
+# インストール
+npm install
+
+# 開発モードで実行
 npm run dev
 ```
 
 ---
 
-## 補足
-*   エラーハンドリング: 既にチャンネルに参加しているユーザーを招待しても、エラーとして処理を中断せず、他のチャンネルへの招待を続行します。
-*   対象チャンネル: `src/index.ts` の `TARGET_CHANNEL_PREFIX` (デフォルト: `#2026-`) を変更することで、対象外のチャンネルを指定できます。
-*   チャンネルリストの取得: `conversations.list` を使用し、ページネーションを含めてすべての公開チャンネルを検索します。
+## 💡 テクニカルメモ
+
+*   **Prefix 設定**: `src/index.ts` の `TARGET_CHANNEL_PREFIX` で対象チャンネルを自由に変更可能です。
+*   **Rate Limit 対策**: Slack API の制限を考慮し、一括招待が失敗した場合は 300ms 間隔の個別招待に自動で切り替わります。
+*   **堅牢なエラーハンドリング**: すでに参加済みのユーザーがいても、処理を止めることなく次の招待を続行します。
