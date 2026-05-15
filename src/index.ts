@@ -275,7 +275,7 @@ async function inviteUsersToChannel(channelId: string, userIds: string[], custom
               console.error(`Failed to invite user ${userId} to ${channelId}:`, indErrorMsg);
             }
           }
-          await sleep(300); // rate limit 対策: 個別招待間に 300ms 待機
+          await sleep(1000); // rate limit 対策: 個別招待間に 1000ms 待機
         }
       } else {
         console.error(`Failed to invite chunk to ${channelId}:`, errorMsg);
